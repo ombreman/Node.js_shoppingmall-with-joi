@@ -1,5 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const Joi = require("joi") // call joi library
 const jwt = require("jsonwebtoken"); // add jwt token module
 const User = require("./models/user"); // user model을 참조
 const Goods = require("./models/goods"); // goods model을 참조
@@ -17,53 +18,78 @@ db.on("error", console.error.bind(console, "connection error:"));
 const app = express();
 const router = express.Router();
 
+const postUsersSchema = Joi.object({
+    nickname: Joi.string().required(),
+    email: Joi.string().email().required(),
+    password: Joi.string().required(),
+    confirmPassword: Joi.string().required(),
+})
+
 // sign up API start : DB에 사용자 정보를 추가한다는 뜻과 동일
 router.post("/users", async (req, res) => {
-    const { nickname, email, password, confirmPassword } = req.body; // get info from client
+    try {
+        const { nickname, email, password, confirmPassword } = await postUsersSchema.validateAsync(req.body); // get info from client
 
-    // validate passwrod
-    if (password !== confirmPassword) { // allow login if password is correct
-        res.status(400).send({ // if incorrect send 400(Bad request) error message
-            errorMessage: '패스워드가 패드워드 확인란과 동일하지 않습니다.', // 
+        // validate passwrod
+        if (password !== confirmPassword) { // allow login if password is correct
+            res.status(400).send({ // if incorrect send 400(Bad request) error message
+                errorMessage: '패스워드가 패드워드 확인란과 동일하지 않습니다.', // 
+            });
+            return; // code has to be done by doing return
+        }
+
+        // validate email and nickname
+        const existUsers = await User.find({ // check whether nickname and email exist in DB and bring duplicated data from DB
+            $or: [{ email }, { nickname }],
         });
-        return; // code has to be done by doing return
-    }
+        if (existUsers.length) { // get every info meeting conditions
+            res.status(400).send({ // send error 400 message if already exist
+                errorMessage: '이미 가입된 이메일 또는 닉네임이 있습니다.'
+            });
+            return; // finish code if error occurs
+        }
 
-    // validate email and nickname
-    const existUsers = await User.find({ // check whether nickname and email exist in DB and bring duplicated data from DB
-        $or: [{ email }, { nickname }],
-    });
-    if (existUsers.length) { // get every info meeting conditions
-        res.status(400).send({ // send error 400 message if already exist
-            errorMessage: '이미 가입된 이메일 또는 닉네임이 있습니다.'
+        const user = new User({ email, nickname, password }); // save user in DB
+        await user.save();
+
+        res.status(201).send({}); // send success response message, code (201 means created) is suitable based on REST API rules (ref MDN docs)
+
+    } catch (err) {
+        res.status(400).send({
+            errorMessage: "요청한 데이터 형식이 올바르지 않습니다."
         });
-        return; // finish code if error occurs
     }
-
-    const user = new User({ email, nickname, password }); // save user in DB
-    await user.save();
-
-    res.status(201).send({}); // send success response message, code (201 means created) is suitable based on REST API rules (ref MDN docs)
 });
 // sign up API end
 
 // login  API start
+const postAuthSchema = Joi.object({
+    email: Joi.string().email().required(),
+    password: Joi.string().required(),
+})
+
 router.post("/auth", async (req, res) => { // 왜 POST? 입장권(token)을 그때 그때 생산한다. GET으로도 가능하지만 body에 정보를 못 싣고 주소에 치기때문에 보안에 취약
-    const { email, password } = req.body; // take email and password
+    try {
+        const { email, password } = await postAuthSchema.validateAsync(req.body); // take email and password
 
-    const user = await User.findOne({ email, password }).exec(); // find whether there's corresponding users in DB
+        const user = await User.findOne({ email, password }).exec(); // find whether there's corresponding users in DB
 
-    if (!user) { // if no corresponding users,
-        res.status(400).send({ // send an error message
-            errorMessage: '이메일 또는 패스워드가 잘못됐습니다.'
+        if (!user) { // if no corresponding users,
+            res.status(400).send({ // send an error message
+                errorMessage: '이메일 또는 패스워드가 잘못됐습니다.'
+            });
+            return; // finish code if error occurs
+        }
+
+        const token = jwt.sign({ userId: user.userId }, "my-secret-key"); // make token (sign must be included)
+        res.send({
+            token,
         });
-        return; // finish code if error occurs
-    }
-
-    const token = jwt.sign({ userId: user.userId }, "my-secret-key"); // make token (sign must be included)
-    res.send({
-        token,
-    });
+    } catch (error) {
+        res.status(400).send({
+            errorMessage: "요청한 데이터 형식이 올바르지 않습니다."
+        });
+    };
 });
 // login API end
 

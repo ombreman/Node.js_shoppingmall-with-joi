@@ -2,6 +2,8 @@ const express = require("express");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken"); // add jwt token module
 const User = require("./models/user"); // user model을 참조
+const Goods = require("./models/goods"); // goods model을 참조
+const Cart = require("./models/cart"); // cart model을 참조
 const authMiddleware = require("./middlewares/auth-middleware"); // add middleware for arthorisation
 
 // connect mongodb
@@ -46,7 +48,7 @@ router.post("/users", async (req, res) => {
 // sign up API end
 
 // login  API start
-router.post("/auth", async(req, res) => { // 왜 POST? 입장권(token)을 그때 그때 생산한다. GET으로도 가능하지만 body에 정보를 못 싣고 주소에 치기때문에 보안에 취약
+router.post("/auth", async (req, res) => { // 왜 POST? 입장권(token)을 그때 그때 생산한다. GET으로도 가능하지만 body에 정보를 못 싣고 주소에 치기때문에 보안에 취약
     const { email, password } = req.body; // take email and password
 
     const user = await User.findOne({ email, password }).exec(); // find whether there's corresponding users in DB
@@ -66,7 +68,7 @@ router.post("/auth", async(req, res) => { // 왜 POST? 입장권(token)을 그�
 // login API end
 
 // authorization middleware start
-router.get("/users/me", authMiddleware, async(req, res) => { // authMiddleware 반드시 붙여줘야한다. 안그러면 res.locals 에 아무 정보도 담기지 않게 된다.
+router.get("/users/me", authMiddleware, async (req, res) => { // authMiddleware 반드시 붙여줘야한다. 안그러면 res.locals 에 아무 정보도 담기지 않게 된다.
     const { user } = res.locals; // destructing (구조분해할당) >> res.locals 속의 key 값이 user에 들어간다.
     res.send({ // 필요한 정보만 골라서 client에 보내준다.
         // user => 그냥 이렇게 해도 되긴 되자만 자세히 적어주는게 best
@@ -77,6 +79,126 @@ router.get("/users/me", authMiddleware, async(req, res) => { // authMiddleware �
     });
 });
 // authorization middleware end
+
+// 숙제 start
+/**
+ * 내가 가진 장바구니 목록을 전부 불러온다.
+ */
+router.get("/goods/cart", authMiddleware, async (req, res) => {
+    const { userId } = res.locals.user;
+
+    const cart = await Cart.find({
+        userId,
+    }).exec();
+
+    const goodsIds = cart.map((c) => c.goodsId);
+
+    // 루프 줄이기 위해 Mapping 가능한 객체로 만든것
+    const goodsKeyById = await Goods.find({
+        _id: { $in: goodsIds },
+    })
+        .exec()
+        .then((goods) =>
+            goods.reduce(
+                (prev, g) => ({
+                    ...prev,
+                    [g.goodsId]: g,
+                }),
+                {}
+            )
+        );
+
+    res.send({
+        cart: cart.map((c) => ({
+            quantity: c.quantity,
+            goods: goodsKeyById[c.goodsId],
+        })),
+    });
+});
+
+/**
+ * 장바구니에 상품 담기.
+ * 장바구니에 상품이 이미 담겨있으면 갯수만 수정한다.
+ */
+router.put("/goods/:goodsId/cart", authMiddleware, async (req, res) => {
+    const { userId } = res.locals.user;
+    const { goodsId } = req.params;
+    const { quantity } = req.body;
+
+    const existsCart = await Cart.findOne({
+        userId,
+        goodsId,
+    }).exec();
+
+    if (existsCart) {
+        existsCart.quantity = quantity;
+        await existsCart.save();
+    } else {
+        const cart = new Cart({
+            userId,
+            goodsId,
+            quantity,
+        });
+        await cart.save();
+    }
+
+    // NOTE: 성공했을때 응답 값을 클라이언트가 사용하지 않는다.
+    res.send({});
+});
+
+/**
+ * 장바구니 항목 삭제
+ */
+router.delete("/goods/:goodsId/cart", authMiddleware, async (req, res) => {
+    const { userId } = res.locals.user;
+    const { goodsId } = req.params;
+
+    const existsCart = await Cart.findOne({
+        userId,
+        goodsId,
+    }).exec();
+
+    // 있든 말든 신경 안쓴다. 그냥 있으면 지운다.
+    if (existsCart) {
+        existsCart.delete();
+    }
+
+    // NOTE: 성공했을때 딱히 정해진 응답 값이 없다.
+    res.send({});
+});
+
+/**
+ * 모든 상품 가져오기
+ * 상품도 몇개 없는 우리에겐 페이지네이션은 사치다.
+ * @example
+ * /api/goods
+ * /api/goods?category=drink
+ * /api/goods?category=drink2
+ */
+router.get("/goods", authMiddleware, async (req, res) => {
+    const { category } = req.query;
+    const goods = await Goods.find(category ? { category } : undefined)
+        .sort("-date")
+        .exec();
+
+    res.send({ goods });
+});
+
+/**
+ * 상품 하나만 가져오기
+ */
+router.get("/goods/:goodsId", authMiddleware, async (req, res) => {
+    const { goodsId } = req.params;
+    const goods = await Goods.findById(goodsId).exec();
+
+    if (!goods) {
+        res.status(404).send({});
+    } else {
+        res.send({ goods });
+    }
+});
+
+// 숙제 end
 
 app.use("/api", express.urlencoded({ extended: false }), router);
 app.use(express.static("assets")); // 프론트앤드 파일 불러오기
